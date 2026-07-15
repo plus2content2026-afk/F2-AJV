@@ -23,14 +23,14 @@ def createtable():
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS {code} (
             Day VARCHAR(8), 
-            P1 VARCHAR(10), 
-            P2 VARCHAR(10), 
-            P3 VARCHAR(10), 
-            P4 VARCHAR(10), 
-            P5 VARCHAR(10), 
-            P6 VARCHAR(10), 
-            P7 VARCHAR(10), 
-            P8 VARCHAR(10)
+            P1 VARCHAR(1), 
+            P2 VARCHAR(1), 
+            P3 VARCHAR(1), 
+            P4 VARCHAR(1), 
+            P5 VARCHAR(1), 
+            P6 VARCHAR(1), 
+            P7 VARCHAR(1), 
+            P8 VARCHAR(1)
             )
         """)
 
@@ -56,6 +56,7 @@ def insertval(tablewin):
     inserttable.focus()
     inserttable.lift()
     print("Ivade vare working")
+    c.execute("INSERT INTO TABLE {code} values('{}','{}','{}','{}','{}','{}','{}','{}','{}')".format())
 def showtable():
     tablewin.destroy()
     
