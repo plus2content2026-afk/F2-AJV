@@ -36,19 +36,30 @@ def createtable():
 
     entry.delete(0, 'end')
     entry1.delete(0, 'end')
-    insertval()
-def insertval():
+    showedit()
+def showedit():
     tablewin = ctk.CTkToplevel(app)
     tablewin.title("Create/Edit")
     tablewin.geometry("450x200")
-    cb = ctk.CTkButton(tablewin,text="Create Timetable",command=createtable)
-    eb = ctk.CTkButton(tablewin,text="Show existing table",command=showtable)
+    cb = ctk.CTkButton(tablewin,text="Create Timetable",command= lambda: insertval(tablewin),)
+    eb = ctk.CTkButton(tablewin,text="Show existing table",command= lambda :showtable(tablewin))
     cb.grid(row=1,column=0,padx=30,pady=20,sticky="e")
     eb.grid(row=1,column=2,padx=30,pady=20,sticky="w")
     tablewin.focus()
     tablewin.lift()
-def createtable():
+    print("working")
+def insertval(tablewin):
+    tablewin.destroy()
+    inserttable = ctk.CTkToplevel(app)
+    inserttable.title("Create Table")
+    inserttable.geometry("800x800")
+    inserttable.focus()
+    inserttable.lift()
+    print("Ivade vare working")
+def showtable():
+    tablewin.destroy()
     
+    print("Ivadeyum working aan")
 button = ctk.CTkButton(app, text="Enter", command=createtable)
 button.grid(column=0,row=4,pady=10,padx=10,columnspan=3)
 app.mainloop()
