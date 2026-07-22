@@ -25,9 +25,8 @@ def welcomepage():
     
     entry1 = ctk.CTkEntry(app, placeholder_text="Type in your Code", width=280)
     entry1.grid(row=1, column=1, padx=30, pady=20, sticky="w")
-    
 
-    def on_submit():
+    def on_submit(event=None):
         global code, name
         name = entry.get()
         code = entry1.get()
@@ -49,10 +48,16 @@ def welcomepage():
         entry.delete(0, 'end')
         entry1.delete(0, 'end')
         showedit()
-
+    entry1.bind("<Return>",on_submit)
     button = ctk.CTkButton(app, text="Enter", command=on_submit)
     button.grid(column=0, row=4, pady=10, padx=10, columnspan=3)
-    
+    label2 = ctk.CTkLabel(app, text="For students")
+    label2.grid(column=0,row=5,pady=2,padx=5,columnspan=3)
+    cd = ctk.CTkEntry(app,placeholder_text="Enter your Class-Division",width=160)
+    cd.grid(column=0,row=6,padx=3,pady=10,columnspan=3)
+    btn1 = ctk.CTkButton(app,text="Show timetable")
+    btn1.grid(column=0,row=7,padx=8,pady=10,columnspan=5)
+    cl1 = cd.get()
     app.mainloop()
 
 def showedit():
@@ -103,15 +108,25 @@ def insertval(tablewin):
 
     def handle_save():
         c.execute("USE user1")
-        for day, entries in entry_matrix.items():
-            tasks = [entry_field.get() for entry_field in entries]
-            query = f"REPLACE INTO `{code}` (Day, P1, P2, P3, P4, P5, P6, P7, P8) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            values = [day] + tasks
-            c.execute(query, values)
-            
-        con.commit()
-        print("Weekly Schedule Saved Successfully!")
-        inserttable.destroy()
+        try:
+            c.execute(f"DELETE FROM {code}")
+            for day, entries in entry_matrix.items():
+                tasks = [entry_field.get() for entry_field in entries]
+                query = f"REPLACE INTO `{code}` (Day, P1, P2, P3, P4, P5, P6, P7, P8) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                values = [day] + tasks
+                c.execute(query, values)
+            con.commit()
+            print("Weekly Schedule Saved Successfully!")
+            inserttable.destroy()
+        except:
+            for day, entries in entry_matrix.items():
+                tasks = [entry_field.get() for entry_field in entries]
+                query = f"REPLACE INTO `{code}` (Day, P1, P2, P3, P4, P5, P6, P7, P8) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                values = [day] + tasks
+                c.execute(query, values)
+            con.commit()
+            print("Weekly Schedule Saved Successfully!")
+            inserttable.destroy()
 
     save_btn = ctk.CTkButton(inserttable, text="Save Weekly Schedule", command=handle_save)
     save_btn.pack(pady=(0, 20))
@@ -120,7 +135,6 @@ def showtable(tablewin):
     tablewin.destroy()
     c.execute("USE user1")
     
-    # Check if table has data safely
     try:
         c.execute(f"SELECT 1 FROM `{code}` LIMIT 1")
         has_data = c.fetchone() is not None
