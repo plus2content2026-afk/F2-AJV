@@ -105,7 +105,7 @@ def insertval(tablewin):
         c.execute("USE user1")
         for day, entries in entry_matrix.items():
             tasks = [entry_field.get() for entry_field in entries]
-            query = f"INSERT INTO `{code}` (Day, P1, P2, P3, P4, P5, P6, P7, P8) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            query = f"REPLACE INTO `{code}` (Day, P1, P2, P3, P4, P5, P6, P7, P8) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             values = [day] + tasks
             c.execute(query, values)
             
