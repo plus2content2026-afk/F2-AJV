@@ -1,6 +1,7 @@
 import mysql.connector as m
 import customtkinter as ctk
 import pandas as pd
+import keyboard
 
 con = m.connect(host="localhost", user="root", passwd="student")
 c = con.cursor()
@@ -53,12 +54,16 @@ def welcomepage():
     button.grid(column=0, row=4, pady=10, padx=10, columnspan=3)
     label2 = ctk.CTkLabel(app, text="For students")
     label2.grid(column=0,row=5,pady=2,padx=5,columnspan=3)
+    def student_table():
+        
     cd = ctk.CTkEntry(app,placeholder_text="Enter your Class-Division",width=160)
     cd.grid(column=0,row=6,padx=3,pady=10,columnspan=3)
     btn1 = ctk.CTkButton(app,text="Show timetable")
     btn1.grid(column=0,row=7,padx=8,pady=10,columnspan=5)
     cl1 = cd.get()
     app.mainloop()
+    keyboard.wait("enter")
+    keyboard.hook(on_submit)
 
 def showedit():
     tablewin = ctk.CTkToplevel(app)
