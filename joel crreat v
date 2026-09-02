@@ -108,6 +108,35 @@ def compute_student_schedule(student_class):
     return pd.DataFrame(data)
 
 
+def get_other_teacher_slot_map(exclude_teacher):
+    """Build {(day, period): {class_code_lower: (teacher, subject)}} across
+    every teacher's table except exclude_teacher.
+
+    Used to catch double-bookings: the same class can't be in two places
+    at the same day/period, even if two different teachers entered it.
+    """
+    slot_map = {}
+    for teacher in get_all_teacher_tables():
+        if teacher == exclude_teacher:
+            continue
+        try:
+            c.execute(f"SELECT * FROM `{teacher}`")
+            cols = [d[0] for d in c.description]
+            rows = c.fetchall()
+        except m.Error:
+            continue
+        for row in rows:
+            row_dict = dict(zip(cols, row))
+            day = row_dict.get("Day")
+            for period in PERIODS:
+                parsed = parse_cell(row_dict.get(period))
+                if not parsed:
+                    continue
+                class_code, subject = parsed
+                slot_map.setdefault((day, period), {})[class_code.lower()] = (teacher, subject)
+    return slot_map
+
+
 def get_all_classes():
     """Distinct class codes found across every teacher's table."""
     classes_found = set()
@@ -328,9 +357,9 @@ def showedit():
 
     hint = ctk.CTkLabel(
         tablewin,
-        text="Fill each period as ClassCode:Subject (e.g. 10A:Math).\n"
-             "Students will only ever see the periods that match their\n"
-             "own class, pulled together from every teacher's entries.",
+        text="Enter the Subject once, then just the Class code in each\n"
+             "period. Students will only ever see the periods that match\n"
+             "their own class, pulled together from every teacher's entries.",
         font=("Arial", 12), text_color="gray70", justify="center"
     )
     hint.grid(row=1, column=0, columnspan=3, pady=(0, 10))
@@ -363,10 +392,18 @@ def insertval(tablewin):
     inserttable.lift()
 
     legend = ctk.CTkLabel(
-        inserttable, text="Format each filled period as ClassCode:Subject (e.g. 10A:Math)",
+        inserttable, text="Enter the subject once below, then just the Class code per period",
         font=("Arial", 12), text_color="gray70"
     )
     legend.pack(pady=(15, 0))
+
+    subject_row = ctk.CTkFrame(inserttable, fg_color="transparent")
+    subject_row.pack(pady=(10, 0))
+    ctk.CTkLabel(subject_row, text="Subject:", font=("Arial", 13, "bold")).pack(
+        side="left", padx=(0, 10)
+    )
+    subject_entry = ctk.CTkEntry(subject_row, placeholder_text="e.g. Math", width=220)
+    subject_entry.pack(side="left")
 
     entry_matrix = {}
 
@@ -394,27 +431,55 @@ def insertval(tablewin):
     except m.Error:
         existing = {}
 
+    # Existing cells are stored as "Class:Subject" - split them so the
+    # grid only shows the class code, and prefill the Subject field with
+    # whatever subject shows up most often in the saved data.
+    found_subjects = {}
+    for day_name, row_dict in existing.items():
+        for period in PERIODS:
+            parsed = parse_cell(row_dict.get(period))
+            if parsed:
+                found_subjects[parsed[1]] = found_subjects.get(parsed[1], 0) + 1
+    if found_subjects:
+        default_subject = max(found_subjects, key=found_subjects.get)
+        subject_entry.insert(0, default_subject)
+
     for row_idx, day_name in enumerate(DAYS, start=1):
         day_label = ctk.CTkLabel(table_frame, text=day_name, font=("Arial", 12, "bold"))
         day_label.grid(row=row_idx, column=0, padx=8, pady=6, sticky="w")
 
         entry_matrix[day_name] = []
         for col_idx, period in enumerate(PERIODS, start=1):
-            entry_field = ctk.CTkEntry(table_frame, placeholder_text="Class:Subject", width=110)
+            entry_field = ctk.CTkEntry(table_frame, placeholder_text="Class code", width=110)
             if day_name in existing and existing[day_name].get(period):
-                entry_field.insert(0, existing[day_name][period])
+                parsed = parse_cell(existing[day_name][period])
+                if parsed:
+                    entry_field.insert(0, parsed[0])
             entry_field.grid(row=row_idx, column=col_idx, padx=6, pady=6, sticky="ew")
             entry_matrix[day_name].append(entry_field)
 
     def handle_save():
-        # Validate format before touching the DB, so we never save a
-        # half-broken cell that would silently vanish from student views.
+        subject = subject_entry.get().strip()
+        any_filled = any(
+            entry_field.get().strip()
+            for entries in entry_matrix.values()
+            for entry_field in entries
+        )
+
+        # Validate before touching the DB, so we never save a half-broken
+        # cell that would silently vanish from student views.
+        if any_filled and not subject:
+            show_message(inserttable, "Subject Required",
+                         "Enter the Subject for this timetable before saving.",
+                         is_error=True)
+            return
+
         errors = []
         for day, entries in entry_matrix.items():
             for period, entry_field in zip(PERIODS, entries):
                 raw = entry_field.get().strip()
-                if raw and CELL_SEP not in raw:
-                    errors.append(f"{day} {period}: \"{raw}\" needs a ':' -> ClassCode:Subject")
+                if raw and CELL_SEP in raw:
+                    errors.append(f"{day} {period}: \"{raw}\" - just the class code here, not the subject")
         if errors:
             show_message(
                 inserttable, "Fix Entries Before Saving",
@@ -423,10 +488,40 @@ def insertval(tablewin):
             )
             return
 
+        # A class can't be in two places at once - check every filled cell
+        # against what every OTHER teacher has already saved for that same
+        # day/period, and block the save if there's a clash.
+        conflicts = []
+        slot_map = get_other_teacher_slot_map(exclude_teacher=code)
+        for day, entries in entry_matrix.items():
+            for period, entry_field in zip(PERIODS, entries):
+                class_code = entry_field.get().strip()
+                if not class_code:
+                    continue
+                hit = slot_map.get((day, period), {}).get(class_code.lower())
+                if hit:
+                    other_teacher, other_subject = hit
+                    conflicts.append(
+                        f"{day} {period}: class {class_code} already has "
+                        f"{other_subject or 'a class'} with teacher '{other_teacher}'"
+                    )
+        if conflicts:
+            show_message(
+                inserttable, "Timetable Conflict",
+                "This class is already booked at the same time elsewhere:\n\n"
+                + "\n".join(conflicts[:5]) + ("\n..." if len(conflicts) > 5 else ""),
+                is_error=True,
+            )
+            return
+
         try:
             c.execute("USE user1")
             for day, entries in entry_matrix.items():
-                tasks = [entry_field.get().strip() for entry_field in entries]
+                tasks = [
+                    f"{entry_field.get().strip()}{CELL_SEP}{subject}"
+                    if entry_field.get().strip() else ""
+                    for entry_field in entries
+                ]
                 query = (
                     f"REPLACE INTO `{code}` "
                     "(Day, P1, P2, P3, P4, P5, P6, P7, P8) "
