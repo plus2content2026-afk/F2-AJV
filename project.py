@@ -4,9 +4,7 @@ import customtkinter as ctk
 import pandas as pd
 import ctypes
 
-# ---------------------------------------------------------------------------
-# DB connection
-# ---------------------------------------------------------------------------
+
 con = m.connect(host="localhost", user="root", passwd="student")
 c = con.cursor()
 c.execute("CREATE DATABASE IF NOT EXISTS user1")
@@ -17,20 +15,14 @@ ctk.set_default_color_theme("gold.json")
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 PERIODS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]
 
-# Only letters, numbers and underscores are allowed in a table name.
+
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
-# Separator used inside a period cell: "ClassCode:Subject"
 CELL_SEP = ":"
 
 
 def clean_code(raw: str) -> str:
-    """Turn user input into a safe MySQL table name, or '' if invalid.
-
-    Used for the TEACHER's own identifying code (the table name) -
-    e.g. a teacher's initials. Lower-cased so '10A' and '10a' land on
-    the same table.
-    """
+    
     candidate = raw.strip().replace(" ", "_").replace("-", "_").lower()
     if not candidate or not CODE_PATTERN.match(candidate):
         return ""
@@ -38,13 +30,7 @@ def clean_code(raw: str) -> str:
 
 
 def parse_cell(raw):
-    """Parse a period cell of the form 'ClassCode:Subject'.
-
-    Returns (class_code, subject) or None if the cell is empty or
-    doesn't follow the expected format. This is what lets us later
-    find "every period that belongs to class X", across every
-    teacher's table.
-    """
+    
     if raw is None:
         return None
     raw = raw.strip()
@@ -59,7 +45,7 @@ def parse_cell(raw):
 
 
 def get_all_teacher_tables():
-    """List every table (= every teacher's timetable) in the DB."""
+    
     c.execute("USE user1")
     c.execute(
         "SELECT table_name FROM information_schema.tables "
@@ -69,14 +55,7 @@ def get_all_teacher_tables():
 
 
 def compute_student_schedule(student_class):
-    """Scan every teacher's table and pull out only the periods that
-    belong to this student's class, building a personalised timetable.
-
-    Returns a DataFrame shaped like the normal grid (Day + P1..P8),
-    where each cell is 'Teacher - Subject' for periods this class has
-    and empty otherwise. Nothing else from any teacher's table is
-    exposed.
-    """
+    
     target = student_class.strip().lower()
     grid = {day: {p: [] for p in PERIODS} for day in DAYS}
 
@@ -109,7 +88,7 @@ def compute_student_schedule(student_class):
 
 
 def get_all_classes():
-    """Distinct class codes found across every teacher's table."""
+    
     classes_found = set()
     for teacher in get_all_teacher_tables():
         try:
@@ -128,13 +107,12 @@ def get_all_classes():
 
 
 def show_message(parent, title, message, is_error=False):
-    """A small popup used everywhere instead of print()."""
+    
     win = ctk.CTkToplevel(parent)
     win.title(title)
     win.geometry("440x200")
     win.transient(parent)
-    win.grab_set()  # modal - user must dismiss before doing anything else
-
+    win.grab_set() 
     color = "#e04b4b" if is_error else "#3fa34d"
     label = ctk.CTkLabel(
         win, text=message, font=("Arial", 15), wraplength=400,
@@ -150,9 +128,7 @@ def show_message(parent, title, message, is_error=False):
     return win
 
 
-# ---------------------------------------------------------------------------
-# Welcome / entry page
-# ---------------------------------------------------------------------------
+
 def welcomepage():
     global app, entry, entry1
 
@@ -199,7 +175,7 @@ def welcomepage():
                     P5 VARCHAR(60), P6 VARCHAR(60), P7 VARCHAR(60), P8 VARCHAR(60)
                 )
             """)
-            # Widen columns on tables created before this format existed.
+            
             for period in PERIODS:
                 try:
                     c.execute(f"ALTER TABLE `{code}` MODIFY COLUMN {period} VARCHAR(60)")
@@ -218,7 +194,7 @@ def welcomepage():
     button = ctk.CTkButton(app, text="Enter", command=on_submit)
     button.grid(column=0, row=4, pady=10, padx=10, columnspan=3)
 
-    # ---- Student section -------------------------------------------------
+    
     sep = ctk.CTkLabel(app, text="────────────", text_color="gray")
     sep.grid(column=0, row=5, pady=(20, 2), padx=5, columnspan=3)
 
@@ -253,11 +229,7 @@ def welcomepage():
 
 
 def browse_classes():
-    """Lets a student pick a class from a list instead of typing it.
-
-    The list is built from the class codes teachers have actually
-    entered (via 'ClassCode:Subject'), not from raw teacher table names.
-    """
+   
     ready = get_all_classes()
 
     win = ctk.CTkToplevel(app)
@@ -294,9 +266,7 @@ def browse_classes():
 
 
 def student_show_table():
-    """Read-only lookup for students: a timetable built just for their
-    class, pulled from every teacher's entries - never a teacher's raw
-    table."""
+    
     df = compute_student_schedule(code)
     has_any = any(df[p].str.len().gt(0).any() for p in PERIODS)
 
@@ -313,9 +283,7 @@ def student_show_table():
     render_table_window(f"Timetable: {code}", df)
 
 
-# ---------------------------------------------------------------------------
-# Teacher: create/edit chooser
-# ---------------------------------------------------------------------------
+
 def showedit():
     tablewin = ctk.CTkToplevel(app)
     tablewin.title("Create/Edit")
@@ -350,9 +318,7 @@ def showedit():
     tablewin.after(10, tablewin.lift)
 
 
-# ---------------------------------------------------------------------------
-# Teacher: create / edit grid
-# ---------------------------------------------------------------------------
+
 def insertval(tablewin):
     tablewin.destroy()
     inserttable = ctk.CTkToplevel(app)
@@ -382,7 +348,7 @@ def insertval(tablewin):
                                text_color="#1f538d")
         header.grid(row=0, column=col_idx, padx=8, pady=8, sticky="ew")
 
-    # Pre-fill with existing values, if any, so editing doesn't wipe data blind.
+    
     existing = {}
     try:
         c.execute("USE user1")
@@ -407,8 +373,7 @@ def insertval(tablewin):
             entry_matrix[day_name].append(entry_field)
 
     def handle_save():
-        # Validate format before touching the DB, so we never save a
-        # half-broken cell that would silently vanish from student views.
+        
         errors = []
         for day, entries in entry_matrix.items():
             for period, entry_field in zip(PERIODS, entries):
@@ -452,16 +417,8 @@ def insertval(tablewin):
     cancel_btn.grid(row=0, column=1, padx=10)
 
 
-# ---------------------------------------------------------------------------
-# Shared: render a read-only table window
-# ---------------------------------------------------------------------------
 def render_table_window(title_text, df=None):
-    """Render a read-only grid.
-
-    If df is given, render that (used for a student's personalised
-    timetable). Otherwise, fall back to querying the current teacher's
-    own raw table (used when a teacher views their own schedule).
-    """
+   
     if df is None:
         query = f"SELECT * FROM `{code}`"
         df = pd.read_sql_query(query, con)
@@ -487,7 +444,7 @@ def render_table_window(title_text, df=None):
 
 
 def showtable(tablewin):
-    """Teacher's own view of their raw table (all classes they teach)."""
+    
     tablewin.destroy()
     c.execute("USE user1")
     c.execute(
