@@ -373,7 +373,19 @@ def insertval(tablewin):
             entry_matrix[day_name].append(entry_field)
 
     def handle_save():
-        
+        subject = subject_entry.get().strip()
+        any_filled = any(
+            entry_field.get().strip()
+            for entries in entry_matrix.values()
+            for entry_field in entries
+        )
+
+        if any_filled and not subject:
+            show_message(inserttable, "Subject Required",
+                         "Enter the Subject for this timetable before saving.",
+                         is_error=True)
+            return
+
         errors = []
         for day, entries in entry_matrix.items():
             for period, entry_field in zip(PERIODS, entries):
@@ -387,7 +399,28 @@ def insertval(tablewin):
                 is_error=True,
             )
             return
-
+        conflicts = []
+        slot_map = get_other_teacher_slot_map(exclude_teacher=code)
+        for day, entries in entry_matrix.items():
+            for period, entry_field in zip(PERIODS, entries):
+                class_code = entry_field.get().strip()
+                if not class_code:
+                    continue
+                hit = slot_map.get((day, period), {}).get(class_code.lower())
+                if hit:
+                    other_teacher, other_subject = hit
+                    conflicts.append(
+                        f"{day} {period}: class {class_code} already has "
+                        f"{other_subject or 'a class'} with teacher '{other_teacher}'"
+                    )
+        if conflicts:
+            show_message(
+                inserttable, "Timetable Conflict",
+                "This class is already booked at the same time elsewhere:\n\n"
+                + "\n".join(conflicts[:5]) + ("\n..." if len(conflicts) > 5 else ""),
+                is_error=True,
+            )
+            return
         try:
             c.execute("USE user1")
             for day, entries in entry_matrix.items():
