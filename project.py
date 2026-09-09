@@ -157,6 +157,7 @@ def welcomepage():
     global app, entry, entry1
 
     app = ctk.CTk()
+    app.after(10, lambda: set_dark_titlebar(app, False))
     app.geometry("700x580")
     app.title("Timetable Entry")
     app.grid_columnconfigure(0, weight=1)
@@ -519,26 +520,36 @@ def showtable(tablewin):
         btn2.grid(row=2, column=1, padx=10, pady=20, sticky="w")
 
 
+def set_dark_titlebar(window, dark=True):
+    try:
+        if not window.winfo_exists():
+            return
+
+        HWND = ctypes.windll.user32.GetParent(window.winfo_id())
+
+        value = ctypes.c_int(1 if dark else 0)
+
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                HWND, 20, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
+
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                HWND, 19, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
+
+    except (ctypes.ArgumentError, OSError, RuntimeError, ctk.TclError):
+        pass
+
+
 if __name__ == "__main__":
     try:
         welcomepage()
     finally:
-        con.close()
-app.after(10, lambda: set_dark_titlebar(app, False))
-def set_dark_titlebar(window, dark=True):
-    window.update()
-    HWND = ctypes.windll.user32.GetParent(window.winfo_id())
-
-    value = ctypes.c_int(1 if dark else 0)
-    try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            HWND, 20, ctypes.byref(value), ctypes.sizeof(value)
-        )
-    except Exception:
-        pass
-    try:
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            HWND, 19, ctypes.byref(value), ctypes.sizeof(value)
-        )
-    except Exception:
-        pass
+        if con.is_connected():
+            con.close()
