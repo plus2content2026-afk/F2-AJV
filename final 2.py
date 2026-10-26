@@ -1,0 +1,693 @@
+import re
+import mysql.connector as m
+import customtkinter as ctk
+import pandas as pd
+import ctypes
+
+
+con = m.connect(host="localhost", user="root", passwd="student")
+c = con.cursor()
+c.execute("CREATE DATABASE IF NOT EXISTS user1")
+c.execute("USE user1")
+
+ctk.set_default_color_theme("gold.json")
+
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+PERIODS = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"]
+
+# Password required to use "Reset All Data". Change this to whatever you like.
+ADMIN_PASSWORD = "joel"
+
+
+CODE_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+
+CELL_SEP = ":"
+
+
+def clean_code(raw: str) -> str:
+
+    candidate = raw.strip().replace(" ", "_").replace("-", "_").lower()
+    if not candidate or not CODE_PATTERN.match(candidate):
+        return ""
+    return candidate
+
+
+def parse_cell(raw):
+
+    if raw is None:
+        return None
+    raw = raw.strip()
+    if not raw or CELL_SEP not in raw:
+        return None
+    class_part, _, subject_part = raw.partition(CELL_SEP)
+    class_part = class_part.strip()
+    subject_part = subject_part.strip()
+    if not class_part:
+        return None
+    return class_part, subject_part
+
+
+def get_all_teacher_tables():
+
+    c.execute("USE user1")
+    c.execute(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'user1' ORDER BY table_name"
+    )
+    return [row[0] for row in c.fetchall()]
+
+
+def compute_student_schedule(student_class):
+
+    target = student_class.strip().lower()
+    grid = {day: {p: [] for p in PERIODS} for day in DAYS}
+
+    for teacher in get_all_teacher_tables():
+        try:
+            c.execute(f"SELECT * FROM `{teacher}`")
+            cols = [d[0] for d in c.description]
+            rows = c.fetchall()
+        except m.Error:
+            continue
+
+        for row in rows:
+            row_dict = dict(zip(cols, row))
+            day = row_dict.get("Day")
+            if day not in grid:
+                continue
+            for period in PERIODS:
+                parsed = parse_cell(row_dict.get(period))
+                if not parsed:
+                    continue
+                class_code, subject = parsed
+                if class_code.lower() == target:
+                    label = f"{teacher} - {subject}" if subject else teacher
+                    grid[day][period].append(label)
+
+    data = {"Day": DAYS}
+    for p in PERIODS:
+        data[p] = ["; ".join(grid[day][p]) for day in DAYS]
+    return pd.DataFrame(data)
+
+
+def get_other_teacher_slot_map(exclude_teacher):
+    """Build {(day, period): {class_code_lower: (teacher, subject)}} across
+    every teacher's table except exclude_teacher.
+
+    Used to catch double-bookings: the same class can't be in two places
+    (with two different teachers) at the same day/period.
+    """
+    slot_map = {}
+    for teacher in get_all_teacher_tables():
+        if teacher == exclude_teacher:
+            continue
+        try:
+            c.execute(f"SELECT * FROM `{teacher}`")
+            cols = [d[0] for d in c.description]
+            rows = c.fetchall()
+        except m.Error:
+            continue
+        for row in rows:
+            row_dict = dict(zip(cols, row))
+            day = row_dict.get("Day")
+            for period in PERIODS:
+                parsed = parse_cell(row_dict.get(period))
+                if not parsed:
+                    continue
+                class_code, subject = parsed
+                slot_map.setdefault((day, period), {})[class_code.lower()] = (teacher, subject)
+    return slot_map
+
+
+def get_all_classes():
+
+    classes_found = set()
+    for teacher in get_all_teacher_tables():
+        try:
+            c.execute(f"SELECT * FROM `{teacher}`")
+            cols = [d[0] for d in c.description]
+            rows = c.fetchall()
+        except m.Error:
+            continue
+        for row in rows:
+            row_dict = dict(zip(cols, row))
+            for period in PERIODS:
+                parsed = parse_cell(row_dict.get(period))
+                if parsed:
+                    classes_found.add(parsed[0])
+    return sorted(classes_found, key=str.lower)
+
+
+def show_message(parent, title, message, is_error=False):
+
+    win = ctk.CTkToplevel(parent)
+    win.title(title)
+    win.geometry("440x200")
+    win.transient(parent)
+    win.grab_set()
+    color = "#e04b4b" if is_error else "#3fa34d"
+    label = ctk.CTkLabel(
+        win, text=message, font=("Arial", 15), wraplength=400,
+        text_color=color, justify="center"
+    )
+    label.pack(expand=True, padx=20, pady=(20, 10))
+
+    ok_btn = ctk.CTkButton(win, text="OK", command=win.destroy, width=100)
+    ok_btn.pack(pady=(0, 20))
+
+    win.after(10, win.lift)
+    win.after(10, win.focus)
+    return win
+
+
+
+def welcomepage():
+    global app, entry, entry1
+
+    app = ctk.CTk()
+    app.after(10, lambda: set_dark_titlebar(app, False))
+    app.geometry("700x580")
+    app.title("Timetable Entry")
+    app.grid_columnconfigure(0, weight=1)
+    app.grid_columnconfigure(1, weight=1)
+
+    label = ctk.CTkLabel(app, text="Welcome to Timetable Entry", font=("Arial", 23))
+    label.grid(row=0, column=0, columnspan=3, pady=20)
+
+    entry = ctk.CTkEntry(app, placeholder_text="Type in your Name", width=280)
+    entry.grid(row=1, column=0, padx=30, pady=20, sticky="e")
+
+    entry1 = ctk.CTkEntry(app, placeholder_text="Type in your Teacher Code", width=280)
+    entry1.grid(row=1, column=1, padx=30, pady=20, sticky="w")
+
+    status_label = ctk.CTkLabel(app, text="", text_color="#e04b4b")
+    status_label.grid(row=2, column=0, columnspan=3)
+
+    def on_submit(event=None):
+        global code, name
+        name = entry.get().strip()
+        raw_code = entry1.get()
+
+        safe_code = clean_code(raw_code)
+        if not safe_code:
+            status_label.configure(
+                text="Please enter a code using only letters, numbers, spaces or dashes."
+            )
+            return
+
+        code = safe_code
+        status_label.configure(text="")
+
+        try:
+            c.execute("USE user1")
+            c.execute(f"""
+                CREATE TABLE IF NOT EXISTS `{code}` (
+                    Day VARCHAR(15) PRIMARY KEY,
+                    P1 VARCHAR(60), P2 VARCHAR(60), P3 VARCHAR(60), P4 VARCHAR(60),
+                    P5 VARCHAR(60), P6 VARCHAR(60), P7 VARCHAR(60), P8 VARCHAR(60)
+                )
+            """)
+
+            for period in PERIODS:
+                try:
+                    c.execute(f"ALTER TABLE `{code}` MODIFY COLUMN {period} VARCHAR(60)")
+                except m.Error:
+                    pass
+            con.commit()
+        except m.Error as err:
+            show_message(app, "Database Error", f"Could not open that table:\n{err}", is_error=True)
+            return
+
+        entry.delete(0, "end")
+        entry1.delete(0, "end")
+        showedit()
+
+    entry1.bind("<Return>", on_submit)
+    button = ctk.CTkButton(app, text="Enter", command=on_submit)
+    button.grid(column=0, row=4, pady=10, padx=10, columnspan=3)
+
+
+    sep = ctk.CTkLabel(app, text="────────────", text_color="gray")
+    sep.grid(column=0, row=5, pady=(20, 2), padx=5, columnspan=3)
+
+    label2 = ctk.CTkLabel(app, text="For students", font=("Arial", 16, "bold"))
+    label2.grid(column=0, row=6, pady=2, padx=5, columnspan=3)
+
+    cd = ctk.CTkEntry(app, placeholder_text="Enter your Class (e.g. 10A)", width=280)
+    cd.grid(column=0, row=7, padx=10, pady=10, columnspan=3)
+
+    student_status = ctk.CTkLabel(app, text="", text_color="#e04b4b")
+    student_status.grid(column=0, row=8, columnspan=3)
+
+    def student_lookup(event=None):
+        global code
+        raw = cd.get().strip()
+        if not raw:
+            student_status.configure(text="Please enter your class.")
+            return
+        student_status.configure(text="")
+        code = raw
+        student_show_table()
+
+    cd.bind("<Return>", student_lookup)
+    btn_row = ctk.CTkFrame(app, fg_color="transparent", border_color="white")
+    btn_row.grid(column=0, row=9, columnspan=3, pady=15)
+    btn1 = ctk.CTkButton(btn_row, text="Show timetable", command=student_lookup)
+    btn1.grid(row=0, column=0, padx=8)
+    browse_btn = ctk.CTkButton(btn_row, text="Browse available classes", command=browse_classes)
+    browse_btn.grid(row=0, column=1, padx=8)
+
+    # ---- Admin section (danger zone) --------------------------------------
+    sep2 = ctk.CTkLabel(app, text="────────────", text_color="gray")
+    sep2.grid(column=0, row=10, pady=(20, 2), padx=5, columnspan=3)
+
+    reset_btn = ctk.CTkButton(
+        app, text="Reset All Data", fg_color="#e04b4b", text_color="white", hover_color="#a83232",
+        command=lambda: reset_all_data(app)
+    )
+    reset_btn.grid(column=0, row=11, pady=(5, 15), columnspan=3)
+
+    app.mainloop()
+
+
+def browse_classes():
+
+    ready = get_all_classes()
+
+    win = ctk.CTkToplevel(app)
+    win.title("Available Classes")
+    win.geometry("400x450")
+    win.transient(app)
+    win.grab_set()
+
+    if not ready:
+        ctk.CTkLabel(
+            win, text="No classes have a saved schedule yet.\nCheck back later.",
+            font=("Arial", 14), wraplength=340, justify="center"
+        ).pack(expand=True, padx=20, pady=20)
+    else:
+        ctk.CTkLabel(win, text="Tap a class to view its timetable:",
+                     font=("Arial", 14, "bold")).pack(pady=(20, 10))
+        scroll = ctk.CTkScrollableFrame(win, width=340, height=340)
+        scroll.pack(padx=15, pady=5, fill="both", expand=True)
+
+        def pick(chosen_class):
+            global code
+            code = chosen_class
+            win.destroy()
+            student_show_table()
+
+        for cls in ready:
+            ctk.CTkButton(scroll, text=cls, command=lambda cls=cls: pick(cls)).pack(
+                fill="x", padx=5, pady=4
+            )
+
+    ctk.CTkButton(win, text="Close", fg_color="gray30", text_color="white", command=win.destroy).pack(
+        pady=(0, 15)
+    )
+
+
+def student_show_table():
+
+    df = compute_student_schedule(code)
+    has_any = any(df[p].str.len().gt(0).any() for p in PERIODS)
+
+    if not has_any:
+        show_message(
+            app, "No Schedule Found",
+            f"No periods found for class '{code}' yet.\n"
+            "Ask your teacher(s) to enter periods for this class "
+            "using the format ClassCode:Subject.",
+            is_error=True,
+        )
+        return
+
+    render_table_window(f"Timetable: {code}", df)
+
+
+
+def showedit():
+    tablewin = ctk.CTkToplevel(app)
+    tablewin.title("Create/Edit")
+    tablewin.geometry("470x260")
+    tablewin.transient(app)
+    tablewin.grab_set()
+
+    info = ctk.CTkLabel(tablewin, text=f"Table: {code}", font=("Arial", 14, "bold"))
+    info.grid(row=0, column=0, columnspan=3, pady=(20, 5))
+
+    hint = ctk.CTkLabel(
+        tablewin,
+        text="Fill each period as ClassCode:Subject (e.g. 10A:Math).\n"
+             "Students will only ever see the periods that match their\n"
+             "own class, pulled together from every teacher's entries.",
+        font=("Arial", 12), text_color="gray70", justify="center"
+    )
+    hint.grid(row=1, column=0, columnspan=3, pady=(0, 10))
+
+    cb = ctk.CTkButton(tablewin, text="Create / Edit Timetable",
+                        command=lambda: insertval(tablewin))
+    eb = ctk.CTkButton(tablewin, text="Show existing table",
+                        command=lambda: showtable(tablewin))
+    cb.grid(row=2, column=0, padx=20, pady=20, sticky="e")
+    eb.grid(row=2, column=2, padx=20, pady=20, sticky="w")
+
+    back = ctk.CTkButton(tablewin, text="Back", fg_color="gray30", text_color="white",
+                          command=tablewin.destroy)
+    back.grid(row=3, column=0, columnspan=3, pady=(0, 15))
+
+    tablewin.after(10, tablewin.focus)
+    tablewin.after(10, tablewin.lift)
+
+
+
+def insertval(tablewin):
+    tablewin.destroy()
+    inserttable = ctk.CTkToplevel(app)
+    inserttable.title("Create Table")
+    inserttable.geometry("1000x680")
+    inserttable.grab_set()
+    inserttable.focus()
+    inserttable.lift()
+
+    legend = ctk.CTkLabel(
+        inserttable, text="Enter your subject once below, then just type the class code in each period (e.g. 10A)",
+        font=("Arial", 12), text_color="gray70"
+    )
+    legend.pack(pady=(15, 0))
+
+    subject_row = ctk.CTkFrame(inserttable, fg_color="transparent")
+    subject_row.pack(pady=(10, 0))
+    ctk.CTkLabel(subject_row, text="Subject:", font=("Arial", 13, "bold")).grid(
+        row=0, column=0, padx=(0, 8))
+    subject_entry = ctk.CTkEntry(subject_row, placeholder_text="e.g. Math", width=220)
+    subject_entry.grid(row=0, column=1)
+
+    entry_matrix = {}
+
+    table_frame = ctk.CTkScrollableFrame(inserttable, height=430)
+    table_frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+    day_header = ctk.CTkLabel(table_frame, text="Day", font=("Arial", 13, "bold"),
+                               text_color="#1f538d")
+    day_header.grid(row=0, column=0, padx=8, pady=8, sticky="w")
+
+    for col_idx, col_name in enumerate(PERIODS, start=1):
+        header = ctk.CTkLabel(table_frame, text=col_name, font=("Arial", 13, "bold"),
+                               text_color="#1f538d")
+        header.grid(row=0, column=col_idx, padx=8, pady=8, sticky="ew")
+
+
+    existing = {}
+    try:
+        c.execute("USE user1")
+        c.execute(f"SELECT * FROM `{code}`")
+        cols = [d[0] for d in c.description]
+        for row in c.fetchall():
+            row_dict = dict(zip(cols, row))
+            existing[row_dict["Day"]] = row_dict
+    except m.Error:
+        existing = {}
+
+    for row_idx, day_name in enumerate(DAYS, start=1):
+        day_label = ctk.CTkLabel(table_frame, text=day_name, font=("Arial", 12, "bold"))
+        day_label.grid(row=row_idx, column=0, padx=8, pady=6, sticky="w")
+
+        entry_matrix[day_name] = []
+        for col_idx, period in enumerate(PERIODS, start=1):
+            entry_field = ctk.CTkEntry(table_frame, placeholder_text="Class", width=110)
+            if day_name in existing and existing[day_name].get(period):
+                parsed_existing = parse_cell(existing[day_name][period])
+                if parsed_existing:
+                    entry_field.insert(0, parsed_existing[0])
+                    if parsed_existing[1] and not subject_entry.get().strip():
+                        subject_entry.insert(0, parsed_existing[1])
+                else:
+                    entry_field.insert(0, existing[day_name][period])
+            entry_field.grid(row=row_idx, column=col_idx, padx=6, pady=6, sticky="ew")
+            entry_matrix[day_name].append(entry_field)
+
+    def build_cell(raw):
+        """Turn a typed class code into the stored 'ClassCode:Subject' text."""
+        raw = raw.strip()
+        if not raw:
+            return ""
+        class_part = raw.split(CELL_SEP, 1)[0].strip()   # ignore any typed ':Subject'
+        if not class_part:
+            return ""
+        return f"{class_part}{CELL_SEP}{subject_entry.get().strip()}"
+
+    def handle_save():
+        subject = subject_entry.get().strip()
+        if not subject:
+            show_message(inserttable, "Subject Missing",
+                         "Enter your subject in the Subject box first.",
+                         is_error=True)
+            return
+
+        any_filled = any(
+            entry_field.get().strip()
+            for entries in entry_matrix.values()
+            for entry_field in entries
+        )
+        if not any_filled:
+            show_message(inserttable, "Nothing To Save",
+                         "Fill in at least one period before saving.",
+                         is_error=True)
+            return
+
+        # A class can't be in two places at once - check every filled cell
+        # against what every OTHER teacher has already saved for that same
+        # day/period, and block the save if there's a clash.
+        conflicts = []
+        slot_map = get_other_teacher_slot_map(exclude_teacher=code)
+        for day, entries in entry_matrix.items():
+            for period, entry_field in zip(PERIODS, entries):
+                parsed = parse_cell(build_cell(entry_field.get()))
+                if not parsed:
+                    continue
+                class_code, _ = parsed
+                hit = slot_map.get((day, period), {}).get(class_code.lower())
+                if hit:
+                    other_teacher, other_subject = hit
+                    conflicts.append(
+                        f"{day} {period}: class {class_code} already has "
+                        f"{other_subject or 'a class'} with teacher '{other_teacher}'"
+                    )
+        if conflicts:
+            show_message(
+                inserttable, "Timetable Conflict",
+                "This class is already booked at the same time elsewhere:\n\n"
+                + "\n".join(conflicts[:5]) + ("\n..." if len(conflicts) > 5 else ""),
+                is_error=True,
+            )
+            return
+        try:
+            c.execute("USE user1")
+            for day, entries in entry_matrix.items():
+                tasks = [build_cell(entry_field.get()) for entry_field in entries]
+                query = (
+                    f"REPLACE INTO `{code}` "
+                    "(Day, P1, P2, P3, P4, P5, P6, P7, P8) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                )
+                c.execute(query, [day] + tasks)
+            con.commit()
+        except m.Error as err:
+            con.rollback()
+            show_message(inserttable, "Save Failed",
+                         f"Could not save the schedule:\n{err}", is_error=True)
+            return
+
+        show_message(app, "Saved", "Weekly schedule saved successfully!")
+        inserttable.destroy()
+
+    btn_row = ctk.CTkFrame(inserttable, fg_color="transparent")
+    btn_row.pack(pady=(0, 20))
+    save_btn = ctk.CTkButton(btn_row, text="Save Weekly Schedule", command=handle_save)
+    save_btn.grid(row=0, column=0, padx=10)
+    cancel_btn = ctk.CTkButton(btn_row, text="Cancel", fg_color="gray30", text_color="white",
+                                command=inserttable.destroy)
+    cancel_btn.grid(row=0, column=1, padx=10)
+
+
+def render_table_window(title_text, df=None):
+
+    if df is None:
+        query = (
+            f"SELECT * FROM `{code}` ORDER BY CASE Day "
+            "WHEN 'Monday' THEN 1 WHEN 'Tuesday' THEN 2 "
+            "WHEN 'Wednesday' THEN 3 WHEN 'Thursday' THEN 4 "
+            "WHEN 'Friday' THEN 5 ELSE 6 END"
+        )
+        df = pd.read_sql_query(query, con)
+
+    shtable = ctk.CTkToplevel(app)
+    shtable.geometry("950x600")
+    shtable.title(title_text)
+
+    scroll = ctk.CTkScrollableFrame(shtable)
+    scroll.pack(fill="both", expand=True, padx=15, pady=15)
+
+    for col_idx, column in enumerate(df.columns):
+        header = ctk.CTkLabel(scroll, text=str(column), font=("Consolas", 20, "bold"))
+        header.grid(row=0, column=col_idx, padx=15, pady=10, sticky="w")
+    for row_idx, row in df.iterrows():
+        for col_idx, value in enumerate(row):
+            display = str(value) if str(value).strip() else "-"
+            cell = ctk.CTkLabel(scroll, text=display, font=("Consolas", 16))
+            cell.grid(row=row_idx + 1, column=col_idx, padx=15, pady=5, sticky="w")
+
+    close_btn = ctk.CTkButton(shtable, text="Close", command=shtable.destroy)
+    close_btn.pack(pady=(0, 15))
+
+
+def showtable(tablewin):
+
+    tablewin.destroy()
+    c.execute("USE user1")
+    c.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'user1' AND table_name = %s",
+        (code,),
+    )
+    table_exists = c.fetchone() is not None
+
+    has_data = False
+    if table_exists:
+        c.execute(f"SELECT 1 FROM `{code}` LIMIT 1")
+        has_data = c.fetchone() is not None
+
+    if has_data:
+        render_table_window(f"Weekly Timetable: {code}")
+    else:
+        dialog_box = ctk.CTkToplevel(app)
+        dialog_box.geometry("680x220")
+        dialog_box.grab_set()
+        label1 = ctk.CTkLabel(dialog_box, text="TIMETABLE DOESN'T EXIST YET!",
+                               font=("Arial", 20), text_color="#e04b4b")
+        label1.grid(row=1, column=0, columnspan=3, padx=30, pady=30)
+
+        btn1 = ctk.CTkButton(dialog_box, text="Make a new one",
+                              command=lambda: insertval(dialog_box))
+        btn2 = ctk.CTkButton(dialog_box, text="Close", fg_color="gray30", text_color="white",
+                              command=dialog_box.destroy)
+        btn1.grid(row=2, column=0, padx=10, pady=20, sticky="e")
+        btn2.grid(row=2, column=1, padx=10, pady=20, sticky="w")
+
+
+def reset_all_data(parent):
+    """Danger zone: permanently drop every teacher's timetable table.
+
+    Requires the admin password before showing the delete confirmation.
+    Nothing is deleted until both the password check and the explicit
+    confirmation succeed.
+    """
+    pw_win = ctk.CTkToplevel(parent)
+    pw_win.title("Admin Password Required")
+    pw_win.geometry("400x180")
+    pw_win.transient(parent)
+    pw_win.grab_set()
+
+    ctk.CTkLabel(
+        pw_win, text="Enter the admin password to reset all data:",
+        font=("Arial", 13), justify="center", wraplength=340
+    ).pack(padx=20, pady=(20, 10))
+
+    pw_entry = ctk.CTkEntry(pw_win, placeholder_text="Password", show="*", width=240)
+    pw_entry.pack(pady=(0, 5))
+
+    pw_status = ctk.CTkLabel(pw_win, text="", text_color="#e04b4b", font=("Arial", 12))
+    pw_status.pack(pady=(0, 5))
+
+    def check_password(event=None):
+        if pw_entry.get() != ADMIN_PASSWORD:
+            pw_status.configure(text="Incorrect password.")
+            pw_entry.delete(0, "end")
+            return
+        pw_win.destroy()
+        _confirm_reset(parent)
+
+    pw_entry.bind("<Return>", check_password)
+
+    btn_row = ctk.CTkFrame(pw_win, fg_color="transparent")
+    btn_row.pack(pady=(5, 15))
+    ctk.CTkButton(btn_row, text="Continue", command=check_password).grid(row=0, column=0, padx=10)
+    ctk.CTkButton(btn_row, text="Cancel", fg_color="gray30", text_color="white",
+                  command=pw_win.destroy).grid(row=0, column=1, padx=10)
+
+    pw_win.after(10, pw_win.lift)
+    pw_win.after(10, pw_entry.focus)
+
+
+def _confirm_reset(parent):
+    """Second step: explicit delete confirmation, shown only after the
+    admin password has already been verified."""
+    confirm = ctk.CTkToplevel(parent)
+    confirm.title("Confirm Reset")
+    confirm.geometry("420x180")
+    confirm.transient(parent)
+    confirm.grab_set()
+
+    ctk.CTkLabel(
+        confirm,
+        text="This will permanently delete ALL teachers'\ntimetables. This cannot be undone.",
+        font=("Arial", 14), text_color="#e04b4b", justify="center"
+    ).pack(expand=True, padx=20, pady=(20, 10))
+
+    def do_reset():
+        try:
+            c.execute("USE user1")
+            for teacher in get_all_teacher_tables():
+                c.execute(f"DROP TABLE IF EXISTS `{teacher}`")
+            con.commit()
+            confirm.destroy()
+            show_message(parent, "Reset Complete", "All timetable data has been cleared.")
+        except m.Error as err:
+            con.rollback()
+            show_message(confirm, "Reset Failed", f"Could not clear data:\n{err}", is_error=True)
+
+    btn_row = ctk.CTkFrame(confirm, fg_color="transparent")
+    btn_row.pack(pady=(0, 15))
+    ctk.CTkButton(btn_row, text="Yes, delete everything", fg_color="#e04b4b", text_color="white",
+                  hover_color="#a83232", command=do_reset).grid(row=0, column=0, padx=10)
+    ctk.CTkButton(btn_row, text="Cancel", fg_color="gray30", text_color="white",
+                  command=confirm.destroy).grid(row=0, column=1, padx=10)
+
+    confirm.after(10, confirm.lift)
+    confirm.after(10, confirm.focus)
+
+
+def set_dark_titlebar(window, dark=True):
+    try:
+        if not window.winfo_exists():
+            return
+
+        HWND = ctypes.windll.user32.GetParent(window.winfo_id())
+
+        value = ctypes.c_int(1 if dark else 0)
+
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                HWND, 20, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
+
+        try:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                HWND, 19, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except Exception:
+            pass
+
+    except (ctypes.ArgumentError, OSError, RuntimeError, ctk.TclError):
+        pass
+
+
+if __name__ == "__main__":
+    try:
+        welcomepage()
+    finally:
+        if con.is_connected():
+            con.close()
